@@ -1,9 +1,7 @@
 name: Publish Package to npm
 
 on:
-  push:
-    branches:
-      - cd/github-packages-publish-workflow
+  workflow_dispatch:
 
 jobs:
   publish:
