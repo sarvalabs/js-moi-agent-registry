@@ -1,5 +1,5 @@
 {
-  "name": "@sarvalabs/js-moi-agent-registry",
+  "name": "js-moi-agent-registry",
   "version": "0.1.0",
   "description": "TypeScript SDK for the AgentRegistryLogic contract on MOI — protocol-agnostic on-chain agent registry",
   "main": "./lib.cjs/index.js",
