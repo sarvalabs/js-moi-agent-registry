@@ -31,31 +31,41 @@ export declare class AgentRegistry {
      */
     registerAgent(input: RegisterAgentInput): Promise<string>;
     /**
-     * Updates the agent's operating wallet address. Owner-only.
+     * Updates the account id of the wallet the agent operates from. Owner-only,
+     * enforced on-chain against the connected wallet's real signature — not a
+     * parameter you pass. Rejected once the agent is DEPRECATED.
      *
      * @throws {TransactionError} If the on-chain transaction fails.
      */
     updateAgentWallet(agentId: string, agentWallet: string): Promise<void>;
     /**
-     * Updates the service URL and card URI for an agent. Owner-only.
+     * Updates the service URL and card URI for an agent. Owner-only, enforced
+     * on-chain against the connected wallet's real signature. Rejected once the
+     * agent is DEPRECATED.
      *
      * @throws {TransactionError} If the on-chain transaction fails.
      */
     updateCard(input: UpdateCardInput): Promise<void>;
     /**
-     * Sets the lifecycle status of an agent. Owner-only.
+     * Sets the lifecycle status of an agent. Owner-only, enforced on-chain
+     * against the connected wallet's real signature. DEPRECATED is terminal —
+     * once set, no further status change is allowed.
      *
      * @throws {TransactionError} If the on-chain transaction fails.
      */
     setAgentStatus(agentId: string, status: AgentStatus): Promise<void>;
     /**
-     * Sets the score payload for an agent. Owner-only.
+     * Sets the score payload for an agent. Admin-only (not owner-only) — the
+     * connected wallet must be the registry's admin account id, enforced
+     * on-chain. Calling this as a regular agent owner will fail.
      *
      * @throws {TransactionError} If the on-chain transaction fails.
      */
     setScore(agentId: string, score: bigint): Promise<void>;
     /**
      * Transfers ownership of an agent to a new wallet. Single atomic operation.
+     * Owner-only, enforced on-chain against the connected wallet's real
+     * signature.
      *
      * @throws {TransactionError} If the on-chain transaction fails.
      */
@@ -66,22 +76,31 @@ export declare class AgentRegistry {
      */
     getAgentProfile(agentId: string): Promise<GetAgentProfileOutput>;
     /**
-     * Returns all agent IDs controlled by the given owner wallet.
+     * Calls GetAgentsByOwner(accountId, offset, limit) directly.
      */
-    getAgentsByOwner(ownerAddress: string): Promise<string[]>;
+    getAgentsByOwner(accountId: string, offset: number, limit: number): Promise<{
+        ids: string[];
+        total: bigint;
+    }>;
     /**
-     * Returns all agent IDs controlled by the connected wallet.
+     * Calls GetAgentsByOwner(connected wallet's account id, offset, limit).
      */
-    getMyAgents(): Promise<string[]>;
+    getMyAgents(offset: number, limit: number): Promise<{
+        ids: string[];
+        total: bigint;
+    }>;
     /**
-     * Returns all registered agent IDs across the entire registry.
+     * Calls GetAllAgentIds(offset, limit) directly.
      */
-    getAllAgentIds(): Promise<string[]>;
+    getAllAgentIds(offset: number, limit: number): Promise<{
+        ids: string[];
+        total: bigint;
+    }>;
     /**
      * Returns the total number of registered agents.
      */
     getAgentCount(): Promise<bigint>;
-    private getCallerAddress;
+    private getCallerAccountId;
     private parseProfile;
 }
 //# sourceMappingURL=registry.d.ts.map

@@ -21,6 +21,19 @@ import {
   QueryError,
 } from './errors.js';
 import { buildAgentCard, agentCardToJson } from './card.js';
+import { Identifier } from 'js-moi-sdk';
+
+// The manifest decoder returns Identifier-typed fields (owner, agent_wallet)
+// as raw Uint8Array — confirmed directly against a live call.
+// String(uint8Array) silently produces a garbage comma-joined number list
+// ("0,0,0,171,...") instead of a usable account id, which then breaks any call
+// that feeds it back in (e.g. getAgentsByOwner(profile.owner)). js-moi-sdk
+// already has the right type for this — wrap it in Identifier and use its
+// own .toHex(), rather than hand-rolling byte-to-hex conversion.
+function identifierToHex(raw: unknown): string {
+  if (raw instanceof Uint8Array) return new Identifier(raw).toHex();
+  return String(raw ?? '');
+}
 
 export class AgentRegistry {
   private readonly wallet: Signer;
@@ -83,13 +96,11 @@ export class AgentRegistry {
    * @throws {TransactionError} If the on-chain transaction fails.
    */
   async registerAgent(input: RegisterAgentInput): Promise<string> {
-    const owner = await this.getCallerAddress();
     try {
       const response = await this.driver.routines.RegisterAgent(
         input.url,
         input.cardUri,
         input.agentWallet,
-        owner,
       ).send();
 
       const receipt = await response.wait();
@@ -112,14 +123,15 @@ export class AgentRegistry {
   }
 
   /**
-   * Updates the agent's operating wallet address. Owner-only.
+   * Updates the account id of the wallet the agent operates from. Owner-only,
+   * enforced on-chain against the connected wallet's real signature — not a
+   * parameter you pass. Rejected once the agent is DEPRECATED.
    *
    * @throws {TransactionError} If the on-chain transaction fails.
    */
   async updateAgentWallet(agentId: string, agentWallet: string): Promise<void> {
-    const caller = await this.getCallerAddress();
     try {
-      const response = await this.driver.routines.UpdateAgentWallet(agentId, agentWallet, caller).send();
+      const response = await this.driver.routines.UpdateAgentWallet(agentId, agentWallet).send();
       await response.wait();
     } catch (error) {
       throw new TransactionError(`Failed to update agent wallet for ${agentId}`, undefined, error);
@@ -127,18 +139,18 @@ export class AgentRegistry {
   }
 
   /**
-   * Updates the service URL and card URI for an agent. Owner-only.
+   * Updates the service URL and card URI for an agent. Owner-only, enforced
+   * on-chain against the connected wallet's real signature. Rejected once the
+   * agent is DEPRECATED.
    *
    * @throws {TransactionError} If the on-chain transaction fails.
    */
   async updateCard(input: UpdateCardInput): Promise<void> {
-    const caller = await this.getCallerAddress();
     try {
       const response = await this.driver.routines.UpdateCard(
         input.agentId,
         input.url,
         input.cardUri,
-        caller,
       ).send();
       await response.wait();
     } catch (error) {
@@ -147,14 +159,15 @@ export class AgentRegistry {
   }
 
   /**
-   * Sets the lifecycle status of an agent. Owner-only.
+   * Sets the lifecycle status of an agent. Owner-only, enforced on-chain
+   * against the connected wallet's real signature. DEPRECATED is terminal —
+   * once set, no further status change is allowed.
    *
    * @throws {TransactionError} If the on-chain transaction fails.
    */
   async setAgentStatus(agentId: string, status: AgentStatus): Promise<void> {
-    const caller = await this.getCallerAddress();
     try {
-      const response = await this.driver.routines.SetAgentStatus(agentId, status, caller).send();
+      const response = await this.driver.routines.SetAgentStatus(agentId, status).send();
       await response.wait();
     } catch (error) {
       throw new TransactionError(`Failed to set status for agent ${agentId}`, undefined, error);
@@ -162,14 +175,15 @@ export class AgentRegistry {
   }
 
   /**
-   * Sets the score payload for an agent. Owner-only.
+   * Sets the score payload for an agent. Admin-only (not owner-only) — the
+   * connected wallet must be the registry's admin account id, enforced
+   * on-chain. Calling this as a regular agent owner will fail.
    *
    * @throws {TransactionError} If the on-chain transaction fails.
    */
   async setScore(agentId: string, score: bigint): Promise<void> {
-    const caller = await this.getCallerAddress();
     try {
-      const response = await this.driver.routines.SetScore(agentId, score, caller).send();
+      const response = await this.driver.routines.SetScore(agentId, score).send();
       await response.wait();
     } catch (error) {
       throw new TransactionError(`Failed to set score for agent ${agentId}`, undefined, error);
@@ -178,13 +192,14 @@ export class AgentRegistry {
 
   /**
    * Transfers ownership of an agent to a new wallet. Single atomic operation.
+   * Owner-only, enforced on-chain against the connected wallet's real
+   * signature.
    *
    * @throws {TransactionError} If the on-chain transaction fails.
    */
   async transferAgent(agentId: string, newOwner: string): Promise<void> {
-    const caller = await this.getCallerAddress();
     try {
-      const response = await this.driver.routines.TransferAgent(agentId, newOwner, caller).send();
+      const response = await this.driver.routines.TransferAgent(agentId, newOwner).send();
       await response.wait();
     } catch (error) {
       throw new TransactionError(`Failed to transfer agent ${agentId}`, undefined, error);
@@ -212,36 +227,36 @@ export class AgentRegistry {
   }
 
   /**
-   * Returns all agent IDs controlled by the given owner wallet.
+   * Calls GetAgentsByOwner(accountId, offset, limit) directly.
    */
-  async getAgentsByOwner(ownerAddress: string): Promise<string[]> {
+  async getAgentsByOwner(accountId: string, offset: number, limit: number): Promise<{ ids: string[]; total: bigint }> {
     try {
-      const callResponse = await this.driver.routines.GetAgentsByOwner(ownerAddress).call();
+      const callResponse = await this.driver.routines.GetAgentsByOwner(accountId, offset, limit).call();
       const decoded = await callResponse.result();
       const output = decoded?.output ?? decoded;
-      return output?.ids ?? [];
+      return { ids: output?.ids ?? [], total: BigInt(output?.total ?? 0) };
     } catch (error) {
-      throw new QueryError(`Failed to get agents for owner: ${ownerAddress}`, error);
+      throw new QueryError(`Failed to get agents for owner: ${accountId}`, error);
     }
   }
 
   /**
-   * Returns all agent IDs controlled by the connected wallet.
+   * Calls GetAgentsByOwner(connected wallet's account id, offset, limit).
    */
-  async getMyAgents(): Promise<string[]> {
-    const address = await this.getCallerAddress();
-    return this.getAgentsByOwner(address);
+  async getMyAgents(offset: number, limit: number): Promise<{ ids: string[]; total: bigint }> {
+    const accountId = await this.getCallerAccountId();
+    return this.getAgentsByOwner(accountId, offset, limit);
   }
 
   /**
-   * Returns all registered agent IDs across the entire registry.
+   * Calls GetAllAgentIds(offset, limit) directly.
    */
-  async getAllAgentIds(): Promise<string[]> {
+  async getAllAgentIds(offset: number, limit: number): Promise<{ ids: string[]; total: bigint }> {
     try {
-      const callResponse = await this.driver.routines.GetAllAgentIds().call();
+      const callResponse = await this.driver.routines.GetAllAgentIds(offset, limit).call();
       const decoded = await callResponse.result();
       const output = decoded?.output ?? decoded;
-      return output?.ids ?? [];
+      return { ids: output?.ids ?? [], total: BigInt(output?.total ?? 0) };
     } catch (error) {
       throw new QueryError('Failed to get all agent IDs', error);
     }
@@ -263,15 +278,15 @@ export class AgentRegistry {
 
   // ── Private ──────────────────────────────────────────────────────────────
 
-  private async getCallerAddress(): Promise<string> {
+  private async getCallerAccountId(): Promise<string> {
     return getIdentifier(this.wallet);
   }
 
   private parseProfile(raw: any): AgentProfile {
     return {
       agent_id:     String(raw?.agent_id ?? ''),
-      owner:        String(raw?.owner ?? ''),
-      agent_wallet: String(raw?.agent_wallet ?? ''),
+      owner:        identifierToHex(raw?.owner),
+      agent_wallet: identifierToHex(raw?.agent_wallet),
       status:       (raw?.status as AgentStatus) ?? AgentStatus.ACTIVE,
       url:          String(raw?.url ?? ''),
       card_uri:     String(raw?.card_uri ?? ''),

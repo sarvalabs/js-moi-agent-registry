@@ -108,7 +108,7 @@ const agentId = await registry.createAgent(
 | `info.description` | `string` | What the agent does |
 | `info.version` | `string` | Agent version (semver) |
 | `info.url` | `string` | Agent service endpoint |
-| `info.agentWallet` | `string` | Address the agent operates from |
+| `info.agentWallet` | `string` | Account id the agent operates from |
 | `info.defaultInputModes` | `string[]` | Optional. Default `["text/plain"]` |
 | `info.defaultOutputModes` | `string[]` | Optional. Default `["text/plain"]` |
 | `info.capabilities` | `AgentCapabilitiesInput` | Optional. All fields default to `false` |
@@ -141,9 +141,24 @@ const agentId = await registry.registerAgent({
 
 ---
 
+### `updateAgentWallet(agentId, agentWallet)`
+
+Updates the account id of the wallet the agent itself operates from (separate from `owner`, which
+controls it). Owner-only. Rejected once the agent's status is `DEPRECATED`.
+
+```ts
+await registry.updateAgentWallet('agent_1', '0xnewagentwallet...');
+```
+
+**Throws** `TransactionError`
+
+---
+
 ### `updateCard(input)`
 
-Updates the service URL and card URI. Owner-only.
+Updates the service URL and card URI. Owner-only. Rejected once the agent's status is
+`DEPRECATED` (terminal — see `setAgentStatus`). The same restriction applies to
+`updateAgentWallet`.
 
 ```ts
 await registry.updateCard({
@@ -159,12 +174,28 @@ await registry.updateCard({
 
 ### `setAgentStatus(agentId, status)`
 
-Sets the lifecycle status. Owner-only.
+Sets the lifecycle status. Owner-only. `ACTIVE` and `PAUSED` can move freely between each other;
+`DEPRECATED` is terminal — once set, no further status change is allowed, and `updateCard`/
+`updateAgentWallet` stop working for that agent too.
 
 ```ts
 await registry.setAgentStatus('agent_1', AgentStatus.PAUSED);
 await registry.setAgentStatus('agent_1', AgentStatus.ACTIVE);
 await registry.setAgentStatus('agent_1', AgentStatus.DEPRECATED);
+```
+
+**Throws** `TransactionError`
+
+---
+
+### `setScore(agentId, score)`
+
+Sets the agent's trust score. **Admin-only** — the connected wallet must be the registry's admin
+account id, enforced on-chain. This is not owner-controlled; calling it as a regular agent owner
+will fail with `TransactionError`.
+
+```ts
+await registry.setScore('agent_1', 850n);
 ```
 
 **Throws** `TransactionError`
@@ -194,7 +225,7 @@ const { profile, found } = await registry.getAgentProfile('agent_1');
 
 if (found) {
   console.log(profile.owner);        // controls the agent
-  console.log(profile.agent_wallet); // address the agent operates from
+  console.log(profile.agent_wallet); // account id the agent operates from
   console.log(profile.url);
   console.log(profile.card_uri);
   console.log(profile.status);       // "ACTIVE" | "PAUSED" | "DEPRECATED"
@@ -205,32 +236,35 @@ if (found) {
 
 ---
 
-### `getAgentsByOwner(ownerAddress)`
+### `getAgentsByOwner(accountId, offset, limit)`
 
-Returns all agent IDs controlled by the given wallet.
+Calls the contract's `GetAgentsByOwner` directly — one page, not the owner's full list. The
+contract clamps `limit` to its own internal maximum regardless of what's requested. Use `total` to
+decide whether to request another page at `offset + ids.length`.
 
 ```ts
-const ids = await registry.getAgentsByOwner('0xabc...');
+const { ids, total } = await registry.getAgentsByOwner('0xabc...', 0, 25);
 ```
 
 ---
 
-### `getMyAgents()`
+### `getMyAgents(offset, limit)`
 
-Returns all agent IDs controlled by the connected wallet.
+Same as `getAgentsByOwner`, for the connected wallet.
 
 ```ts
-const ids = await registry.getMyAgents();
+const { ids, total } = await registry.getMyAgents(0, 25);
 ```
 
 ---
 
-### `getAllAgentIds()`
+### `getAllAgentIds(offset, limit)`
 
-Returns all registered agent IDs.
+Calls the contract's `GetAllAgentIds` directly — one page, not the full registry. Same pagination
+behaviour as `getAgentsByOwner`. `getAgentCount()` is cheaper if you only need the total.
 
 ```ts
-const ids = await registry.getAllAgentIds();
+const { ids, total } = await registry.getAllAgentIds(0, 25);
 ```
 
 ---
@@ -308,7 +342,7 @@ const json = agentCardToJson(
 interface AgentProfile {
   agent_id:     string;
   owner:        string;        // controls the agent
-  agent_wallet: string;        // address the agent operates from
+  agent_wallet: string;        // account id the agent operates from
   status:       AgentStatus;
   url:          string;
   card_uri:     string;
