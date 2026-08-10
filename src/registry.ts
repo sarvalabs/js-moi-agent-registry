@@ -90,7 +90,7 @@ export class AgentRegistry {
         input.cardUri,
         input.agentWallet,
         owner,
-      ).send();
+      ).send({fuel_price: 3000 });
 
       const receipt = await response.wait();
       let decoded: any = null;

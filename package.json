@@ -1,6 +1,6 @@
 {
   "name": "js-moi-agent-registry",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "TypeScript SDK for the AgentRegistryLogic contract on MOI — protocol-agnostic on-chain agent registry",
   "main": "./lib.cjs/index.js",
   "module": "./lib.esm/index.js",
