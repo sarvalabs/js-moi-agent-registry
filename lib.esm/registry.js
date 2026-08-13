@@ -61,7 +61,7 @@ export class AgentRegistry {
     async registerAgent(input) {
         const owner = await this.getCallerAddress();
         try {
-            const response = await this.driver.routines.RegisterAgent(input.url, input.cardUri, input.agentWallet, owner).send({ fuel_price: 3000 });
+            const response = await this.driver.routines.RegisterAgent(input.url, input.cardUri, input.agentWallet, owner).send({ fuel_limit: 10000 });
             const receipt = await response.wait();
             let decoded = null;
             try {
