@@ -1,5 +1,9 @@
-import { SDKConfig, AgentStatus, RegisterAgentInput, UpdateCardInput, AgentInfo, GetAgentProfileOutput } from './types.js';
+import { SDKConfig, AgentStatus, RegisterAgentInput, UpdateCardInput, AgentInfo, GetAgentProfileOutput, AgentIdsResult, SendOptions } from './types.js';
 import type { AgentProtocolSpec } from './card.js';
+/**
+ * Client for the AgentRegistryLogic contract on MOI. Construct via
+ * `AgentRegistry.init(config)`, not the constructor directly.
+ */
 export declare class AgentRegistry {
     private readonly wallet;
     private readonly driver;
@@ -21,15 +25,16 @@ export declare class AgentRegistry {
      * @throws {UploaderError} If the upload step fails.
      * @throws {TransactionError} If the on-chain transaction fails.
      */
-    createAgent(spec: AgentProtocolSpec, info: AgentInfo): Promise<string>;
+    createAgent(spec: AgentProtocolSpec, info: AgentInfo, options?: SendOptions): Promise<string>;
     /**
      * Low-level registration for callers that already hold a `cardUri`.
      * Prefer `createAgent` for the full flow.
      *
      * @returns The assigned `agent_id`.
-     * @throws {TransactionError} If the on-chain transaction fails.
+     * @throws {TransactionError} If the on-chain transaction fails, or succeeds
+     * but its result can't be decoded into an `agent_id`.
      */
-    registerAgent(input: RegisterAgentInput): Promise<string>;
+    registerAgent(input: RegisterAgentInput, options?: SendOptions): Promise<string>;
     /**
      * Updates the account id of the wallet the agent operates from. Owner-only,
      * enforced on-chain against the connected wallet's real signature — not a
@@ -37,7 +42,7 @@ export declare class AgentRegistry {
      *
      * @throws {TransactionError} If the on-chain transaction fails.
      */
-    updateAgentWallet(agentId: string, agentWallet: string): Promise<void>;
+    updateAgentWallet(agentId: string, agentWallet: string, options?: SendOptions): Promise<void>;
     /**
      * Updates the service URL and card URI for an agent. Owner-only, enforced
      * on-chain against the connected wallet's real signature. Rejected once the
@@ -45,7 +50,7 @@ export declare class AgentRegistry {
      *
      * @throws {TransactionError} If the on-chain transaction fails.
      */
-    updateCard(input: UpdateCardInput): Promise<void>;
+    updateCard(input: UpdateCardInput, options?: SendOptions): Promise<void>;
     /**
      * Sets the lifecycle status of an agent. Owner-only, enforced on-chain
      * against the connected wallet's real signature. DEPRECATED is terminal —
@@ -53,7 +58,7 @@ export declare class AgentRegistry {
      *
      * @throws {TransactionError} If the on-chain transaction fails.
      */
-    setAgentStatus(agentId: string, status: AgentStatus): Promise<void>;
+    setAgentStatus(agentId: string, status: AgentStatus, options?: SendOptions): Promise<void>;
     /**
      * Sets the score payload for an agent. Admin-only (not owner-only) — the
      * connected wallet must be the registry's admin account id, enforced
@@ -61,7 +66,7 @@ export declare class AgentRegistry {
      *
      * @throws {TransactionError} If the on-chain transaction fails.
      */
-    setScore(agentId: string, score: bigint): Promise<void>;
+    setScore(agentId: string, score: bigint, options?: SendOptions): Promise<void>;
     /**
      * Transfers ownership of an agent to a new wallet. Single atomic operation.
      * Owner-only, enforced on-chain against the connected wallet's real
@@ -69,7 +74,7 @@ export declare class AgentRegistry {
      *
      * @throws {TransactionError} If the on-chain transaction fails.
      */
-    transferAgent(agentId: string, newOwner: string): Promise<void>;
+    transferAgent(agentId: string, newOwner: string, options?: SendOptions): Promise<void>;
     /**
      * Returns the full on-chain profile for an agent.
      * Returns `{ found: false, profile: null }` if the agent does not exist — does not throw.
@@ -78,28 +83,27 @@ export declare class AgentRegistry {
     /**
      * Calls GetAgentsByOwner(accountId, offset, limit) directly.
      */
-    getAgentsByOwner(accountId: string, offset: number, limit: number): Promise<{
-        ids: string[];
-        total: bigint;
-    }>;
+    getAgentsByOwner(accountId: string, offset: number, limit: number): Promise<AgentIdsResult>;
     /**
      * Calls GetAgentsByOwner(connected wallet's account id, offset, limit).
      */
-    getMyAgents(offset: number, limit: number): Promise<{
-        ids: string[];
-        total: bigint;
-    }>;
+    getMyAgents(offset: number, limit: number): Promise<AgentIdsResult>;
     /**
      * Calls GetAllAgentIds(offset, limit) directly.
      */
-    getAllAgentIds(offset: number, limit: number): Promise<{
-        ids: string[];
-        total: bigint;
-    }>;
+    getAllAgentIds(offset: number, limit: number): Promise<AgentIdsResult>;
     /**
      * Returns the total number of registered agents.
      */
     getAgentCount(): Promise<bigint>;
+    /**
+     * Shared send → wait → verify path for every write endpoint: sends the
+     * already-built routine call, waits for the receipt, and throws
+     * `TransactionError` unless it landed with `RECEIPT_Ok`. Centralises the
+     * error-wrapping every write method needs so each one only has to state
+     * its own routine call and error message.
+     */
+    private sendAndVerify;
     private getCallerAccountId;
     private parseProfile;
 }

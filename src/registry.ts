@@ -1,6 +1,6 @@
-import { LogicDriver } from 'js-moi-sdk';
-import type { Signer } from 'js-moi-sdk';
-import { loadContract } from './client.js';
+import { Identifier, ReceiptStatus } from 'js-moi-sdk';
+import type { InteractionReceipt, LogicDriver, LogicInteractionResponse, Signer } from 'js-moi-sdk';
+import { loadContract, type AgentRegistryRoutines } from './client.js';
 import { getIdentifier } from './utils.js';
 import {
   SDKConfig,
@@ -11,6 +11,8 @@ import {
   UpdateCardInput,
   AgentInfo,
   GetAgentProfileOutput,
+  AgentIdsResult,
+  SendOptions,
 } from './types.js';
 import type { AgentProtocolSpec } from './card.js';
 import {
@@ -21,7 +23,6 @@ import {
   QueryError,
 } from './errors.js';
 import { buildAgentCard, agentCardToJson } from './card.js';
-import { Identifier } from 'js-moi-sdk';
 
 // The manifest decoder returns Identifier-typed fields (owner, agent_wallet)
 // as raw Uint8Array — confirmed directly against a live call.
@@ -30,17 +31,57 @@ import { Identifier } from 'js-moi-sdk';
 // that feeds it back in (e.g. getAgentsByOwner(profile.owner)). js-moi-sdk
 // already has the right type for this — wrap it in Identifier and use its
 // own .toHex(), rather than hand-rolling byte-to-hex conversion.
+//
+// Only Uint8Array (the real decoded shape) and an already-hex string pass
+// through; anything else throws rather than silently stringifying into the
+// same kind of garbage this function exists to avoid.
 function identifierToHex(raw: unknown): string {
   if (raw instanceof Uint8Array) return new Identifier(raw).toHex();
-  return String(raw ?? '');
+  if (typeof raw === 'string') return raw;
+  throw new TypeError(`Expected an Identifier-shaped value (Uint8Array or hex string), got ${typeof raw}`);
 }
 
+// A reverted receipt can still carry a plausible-looking (but stale/garbage)
+// decoded result() payload - confirmed directly against a live node. Every
+// write path must check status before trusting result() at all.
+function assertReceiptOk(receipt: InteractionReceipt, message: string): void {
+  if (receipt.status !== ReceiptStatus.RECEIPT_Ok) {
+    throw new TransactionError(`${message} (receipt status: ${receipt.status})`, receipt.ix_hash, receipt);
+  }
+}
+
+// The read-call equivalent of assertReceiptOk. A `.call()` that fails before
+// the routine's own logic ever runs (e.g. an offset/limit argument that
+// doesn't decode to the u64 the manifest declares) does NOT throw - it
+// resolves with a non-Ok receipt and a null `output` - confirmed live: a
+// negative offset returns receipt.status 1 with output: null, error:
+// {class: 'builtin.CallFailure', ...}. Every read method must check this
+// before trusting `output`, or a real failure silently reads as an empty
+// result (`ids: []`, `total: 0n`) instead of surfacing as a QueryError.
+function assertCallOk(receipt: InteractionReceipt, message: string): void {
+  if (receipt.status !== ReceiptStatus.RECEIPT_Ok) {
+    throw new QueryError(`${message} (receipt status: ${receipt.status})`, receipt);
+  }
+}
+
+// Every routine call (whatever its own arguments) returns the same
+// LogicContext<LogicOps> shape - derived from LogicDriver<AgentRegistryRoutines>
+// itself (picking an arbitrary key) rather than importing LogicContext/LogicOps
+// separately, since a second import path resolves to a structurally-identical
+// but nominally distinct declaration in this workspace layout and trips a
+// "separate declarations of a private property" mismatch.
+type RoutineCall = ReturnType<LogicDriver<AgentRegistryRoutines>['routines']['GetAgentCount']>;
+
+/**
+ * Client for the AgentRegistryLogic contract on MOI. Construct via
+ * `AgentRegistry.init(config)`, not the constructor directly.
+ */
 export class AgentRegistry {
   private readonly wallet: Signer;
-  private readonly driver: LogicDriver;
+  private readonly driver: LogicDriver<AgentRegistryRoutines>;
   private readonly uploader?: CardUploader;
 
-  private constructor(wallet: Signer, driver: LogicDriver, uploader?: CardUploader) {
+  private constructor(wallet: Signer, driver: LogicDriver<AgentRegistryRoutines>, uploader?: CardUploader) {
     this.wallet = wallet;
     this.driver = driver;
     this.uploader = uploader;
@@ -53,7 +94,7 @@ export class AgentRegistry {
    * @throws {ContractLoadError} If the contract manifest cannot be fetched from the network.
    */
   static async init(config: SDKConfig): Promise<AgentRegistry> {
-    let driver: LogicDriver;
+    let driver: LogicDriver<AgentRegistryRoutines>;
     try {
       driver = await loadContract(config.wallet);
     } catch (error) {
@@ -73,7 +114,7 @@ export class AgentRegistry {
    * @throws {UploaderError} If the upload step fails.
    * @throws {TransactionError} If the on-chain transaction fails.
    */
-  async createAgent(spec: AgentProtocolSpec, info: AgentInfo): Promise<string> {
+  async createAgent(spec: AgentProtocolSpec, info: AgentInfo, options?: SendOptions): Promise<string> {
     if (!this.uploader) throw new UploaderRequiredError();
 
     const { agentWallet, ...cardInput } = info;
@@ -85,7 +126,7 @@ export class AgentRegistry {
       throw new UploaderError(error);
     }
 
-    return this.registerAgent({ url: info.url, cardUri, agentWallet });
+    return this.registerAgent({ url: info.url, cardUri, agentWallet }, options);
   }
 
   /**
@@ -93,33 +134,27 @@ export class AgentRegistry {
    * Prefer `createAgent` for the full flow.
    *
    * @returns The assigned `agent_id`.
-   * @throws {TransactionError} If the on-chain transaction fails.
+   * @throws {TransactionError} If the on-chain transaction fails, or succeeds
+   * but its result can't be decoded into an `agent_id`.
    */
-  async registerAgent(input: RegisterAgentInput): Promise<string> {
+  async registerAgent(input: RegisterAgentInput, options?: SendOptions): Promise<string> {
+    const { response, receipt } = await this.sendAndVerify(
+      this.driver.routines.RegisterAgent(input.url, input.cardUri, input.agentWallet),
+      'Failed to register agent',
+      options,
+    );
+
+    let agentId: unknown;
     try {
-      const response = await this.driver.routines.RegisterAgent(
-        input.url,
-        input.cardUri,
-        input.agentWallet,
-      ).send();
-
-      const receipt = await response.wait();
-      let decoded: any = null;
-      try { decoded = await response.result(); } catch {}
-
-      const agentId =
-        decoded?.output?.agent_id ??
-        decoded?.agent_id ??
-        (receipt as any).output?.agent_id;
-
-      if (!agentId || typeof agentId !== 'string') {
-        throw new TransactionError('RegisterAgent succeeded but returned no agent_id', receipt.ix_hash, receipt);
-      }
-      return agentId;
+      agentId = (await response.result()).output?.agent_id;
     } catch (error) {
-      if (error instanceof TransactionError) throw error;
-      throw new TransactionError('Failed to register agent', undefined, error);
+      throw new TransactionError('RegisterAgent succeeded but its result could not be decoded', receipt.ix_hash, error);
     }
+
+    if (typeof agentId !== 'string' || !agentId) {
+      throw new TransactionError('RegisterAgent succeeded but returned no agent_id', receipt.ix_hash);
+    }
+    return agentId;
   }
 
   /**
@@ -129,13 +164,12 @@ export class AgentRegistry {
    *
    * @throws {TransactionError} If the on-chain transaction fails.
    */
-  async updateAgentWallet(agentId: string, agentWallet: string): Promise<void> {
-    try {
-      const response = await this.driver.routines.UpdateAgentWallet(agentId, agentWallet).send();
-      await response.wait();
-    } catch (error) {
-      throw new TransactionError(`Failed to update agent wallet for ${agentId}`, undefined, error);
-    }
+  async updateAgentWallet(agentId: string, agentWallet: string, options?: SendOptions): Promise<void> {
+    await this.sendAndVerify(
+      this.driver.routines.UpdateAgentWallet(agentId, agentWallet),
+      `Failed to update agent wallet for ${agentId}`,
+      options,
+    );
   }
 
   /**
@@ -145,17 +179,12 @@ export class AgentRegistry {
    *
    * @throws {TransactionError} If the on-chain transaction fails.
    */
-  async updateCard(input: UpdateCardInput): Promise<void> {
-    try {
-      const response = await this.driver.routines.UpdateCard(
-        input.agentId,
-        input.url,
-        input.cardUri,
-      ).send();
-      await response.wait();
-    } catch (error) {
-      throw new TransactionError(`Failed to update card for agent ${input.agentId}`, undefined, error);
-    }
+  async updateCard(input: UpdateCardInput, options?: SendOptions): Promise<void> {
+    await this.sendAndVerify(
+      this.driver.routines.UpdateCard(input.agentId, input.url, input.cardUri),
+      `Failed to update card for agent ${input.agentId}`,
+      options,
+    );
   }
 
   /**
@@ -165,13 +194,12 @@ export class AgentRegistry {
    *
    * @throws {TransactionError} If the on-chain transaction fails.
    */
-  async setAgentStatus(agentId: string, status: AgentStatus): Promise<void> {
-    try {
-      const response = await this.driver.routines.SetAgentStatus(agentId, status).send();
-      await response.wait();
-    } catch (error) {
-      throw new TransactionError(`Failed to set status for agent ${agentId}`, undefined, error);
-    }
+  async setAgentStatus(agentId: string, status: AgentStatus, options?: SendOptions): Promise<void> {
+    await this.sendAndVerify(
+      this.driver.routines.SetAgentStatus(agentId, status),
+      `Failed to set status for agent ${agentId}`,
+      options,
+    );
   }
 
   /**
@@ -181,13 +209,12 @@ export class AgentRegistry {
    *
    * @throws {TransactionError} If the on-chain transaction fails.
    */
-  async setScore(agentId: string, score: bigint): Promise<void> {
-    try {
-      const response = await this.driver.routines.SetScore(agentId, score).send();
-      await response.wait();
-    } catch (error) {
-      throw new TransactionError(`Failed to set score for agent ${agentId}`, undefined, error);
-    }
+  async setScore(agentId: string, score: bigint, options?: SendOptions): Promise<void> {
+    await this.sendAndVerify(
+      this.driver.routines.SetScore(agentId, score),
+      `Failed to set score for agent ${agentId}`,
+      options,
+    );
   }
 
   /**
@@ -197,13 +224,12 @@ export class AgentRegistry {
    *
    * @throws {TransactionError} If the on-chain transaction fails.
    */
-  async transferAgent(agentId: string, newOwner: string): Promise<void> {
-    try {
-      const response = await this.driver.routines.TransferAgent(agentId, newOwner).send();
-      await response.wait();
-    } catch (error) {
-      throw new TransactionError(`Failed to transfer agent ${agentId}`, undefined, error);
-    }
+  async transferAgent(agentId: string, newOwner: string, options?: SendOptions): Promise<void> {
+    await this.sendAndVerify(
+      this.driver.routines.TransferAgent(agentId, newOwner),
+      `Failed to transfer agent ${agentId}`,
+      options,
+    );
   }
 
   // ── Read ─────────────────────────────────────────────────────────────────
@@ -215,13 +241,12 @@ export class AgentRegistry {
   async getAgentProfile(agentId: string): Promise<GetAgentProfileOutput> {
     try {
       const callResponse = await this.driver.routines.GetAgentProfile(agentId).call();
-      const decoded = await callResponse.result();
-      const output = decoded?.output ?? decoded;
-      const found = Boolean(output?.found);
-      if (!found) return { profile: null, found: false };
-      return { profile: this.parseProfile(output?.profile), found: true };
+      assertCallOk(callResponse.receipt, `Failed to get agent profile: ${agentId}`);
+      const { output } = await callResponse.result();
+      if (!output?.found) return { profile: null, found: false };
+      return { profile: this.parseProfile(output.profile), found: true };
     } catch (error) {
-      if (String(error).includes('map key does not exist')) return { profile: null, found: false };
+      if (error instanceof QueryError) throw error;
       throw new QueryError(`Failed to get agent profile: ${agentId}`, error);
     }
   }
@@ -229,13 +254,14 @@ export class AgentRegistry {
   /**
    * Calls GetAgentsByOwner(accountId, offset, limit) directly.
    */
-  async getAgentsByOwner(accountId: string, offset: number, limit: number): Promise<{ ids: string[]; total: bigint }> {
+  async getAgentsByOwner(accountId: string, offset: number, limit: number): Promise<AgentIdsResult> {
     try {
       const callResponse = await this.driver.routines.GetAgentsByOwner(accountId, offset, limit).call();
-      const decoded = await callResponse.result();
-      const output = decoded?.output ?? decoded;
+      assertCallOk(callResponse.receipt, `Failed to get agents for owner: ${accountId}`);
+      const { output } = await callResponse.result();
       return { ids: output?.ids ?? [], total: BigInt(output?.total ?? 0) };
     } catch (error) {
+      if (error instanceof QueryError) throw error;
       throw new QueryError(`Failed to get agents for owner: ${accountId}`, error);
     }
   }
@@ -243,7 +269,7 @@ export class AgentRegistry {
   /**
    * Calls GetAgentsByOwner(connected wallet's account id, offset, limit).
    */
-  async getMyAgents(offset: number, limit: number): Promise<{ ids: string[]; total: bigint }> {
+  async getMyAgents(offset: number, limit: number): Promise<AgentIdsResult> {
     const accountId = await this.getCallerAccountId();
     return this.getAgentsByOwner(accountId, offset, limit);
   }
@@ -251,13 +277,14 @@ export class AgentRegistry {
   /**
    * Calls GetAllAgentIds(offset, limit) directly.
    */
-  async getAllAgentIds(offset: number, limit: number): Promise<{ ids: string[]; total: bigint }> {
+  async getAllAgentIds(offset: number, limit: number): Promise<AgentIdsResult> {
     try {
       const callResponse = await this.driver.routines.GetAllAgentIds(offset, limit).call();
-      const decoded = await callResponse.result();
-      const output = decoded?.output ?? decoded;
+      assertCallOk(callResponse.receipt, 'Failed to get all agent IDs');
+      const { output } = await callResponse.result();
       return { ids: output?.ids ?? [], total: BigInt(output?.total ?? 0) };
     } catch (error) {
+      if (error instanceof QueryError) throw error;
       throw new QueryError('Failed to get all agent IDs', error);
     }
   }
@@ -268,20 +295,47 @@ export class AgentRegistry {
   async getAgentCount(): Promise<bigint> {
     try {
       const callResponse = await this.driver.routines.GetAgentCount().call();
-      const decoded = await callResponse.result();
-      const output = decoded?.output ?? decoded;
+      assertCallOk(callResponse.receipt, 'Failed to get agent count');
+      const { output } = await callResponse.result();
       return BigInt(output?.count ?? 0);
     } catch (error) {
+      if (error instanceof QueryError) throw error;
       throw new QueryError('Failed to get agent count', error);
     }
   }
 
   // ── Private ──────────────────────────────────────────────────────────────
 
+  /**
+   * Shared send → wait → verify path for every write endpoint: sends the
+   * already-built routine call, waits for the receipt, and throws
+   * `TransactionError` unless it landed with `RECEIPT_Ok`. Centralises the
+   * error-wrapping every write method needs so each one only has to state
+   * its own routine call and error message.
+   */
+  private async sendAndVerify(
+    context: RoutineCall,
+    errorMessage: string,
+    options?: SendOptions,
+  ): Promise<{ response: LogicInteractionResponse; receipt: InteractionReceipt }> {
+    try {
+      const response = await context.send(options);
+      const receipt = await response.wait();
+      assertReceiptOk(receipt, errorMessage);
+      return { response, receipt };
+    } catch (error) {
+      if (error instanceof TransactionError) throw error;
+      throw new TransactionError(errorMessage, undefined, error);
+    }
+  }
+
   private async getCallerAccountId(): Promise<string> {
     return getIdentifier(this.wallet);
   }
 
+  // `raw` is a dynamically-decoded POLO map (js-moi-sdk types logic call
+  // output as `any` for the same reason - its shape depends on the manifest,
+  // not something fixed enough to type meaningfully at the decode boundary).
   private parseProfile(raw: any): AgentProfile {
     return {
       agent_id:     String(raw?.agent_id ?? ''),

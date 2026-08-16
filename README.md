@@ -67,7 +67,7 @@ The contract logic ID and manifest are baked into the SDK and fetched from the M
 
 ```ts
 interface SDKConfig {
-  wallet:    Wallet;        // connected js-moi-sdk Wallet
+  wallet:    Signer;        // connected js-moi-sdk Signer (e.g. a Wallet)
   uploader?: CardUploader;  // required for createAgent
 }
 
@@ -238,9 +238,9 @@ if (found) {
 
 ### `getAgentsByOwner(accountId, offset, limit)`
 
-Calls the contract's `GetAgentsByOwner` directly — one page, not the owner's full list. The
-contract clamps `limit` to its own internal maximum regardless of what's requested. Use `total` to
-decide whether to request another page at `offset + ids.length`.
+Calls the contract's `GetAgentsByOwner` directly — a bounded `[offset, offset + limit)` slice, not
+the owner's full list. The contract clamps `limit` to its own internal maximum regardless of what's
+requested. Use `total` to decide whether to request another slice at `offset + ids.length`.
 
 ```ts
 const { ids, total } = await registry.getAgentsByOwner('0xabc...', 0, 25);
@@ -260,8 +260,9 @@ const { ids, total } = await registry.getMyAgents(0, 25);
 
 ### `getAllAgentIds(offset, limit)`
 
-Calls the contract's `GetAllAgentIds` directly — one page, not the full registry. Same pagination
-behaviour as `getAgentsByOwner`. `getAgentCount()` is cheaper if you only need the total.
+Calls the contract's `GetAllAgentIds` directly — a bounded `[offset, offset + limit)` slice, not the
+full registry. Same bounding behaviour as `getAgentsByOwner`. `getAgentCount()` is cheaper if you
+only need the total.
 
 ```ts
 const { ids, total } = await registry.getAllAgentIds(0, 25);
@@ -346,6 +347,7 @@ interface AgentProfile {
   status:       AgentStatus;
   url:          string;
   card_uri:     string;
+  score:        bigint;        // admin-set only, 0 by default
   created_at:   bigint;
   updated_at:   bigint;
 }
@@ -354,6 +356,11 @@ enum AgentStatus {
   ACTIVE     = 'ACTIVE',
   PAUSED     = 'PAUSED',
   DEPRECATED = 'DEPRECATED',
+}
+
+interface AgentIdsResult {
+  ids:   string[];
+  total: bigint;
 }
 ```
 
@@ -368,7 +375,6 @@ import {
   UploaderError,
   TransactionError,
   QueryError,
-  AgentNotFoundError,
 } from 'js-moi-agent-registry';
 ```
 
@@ -377,9 +383,11 @@ import {
 | `ContractLoadError` | Manifest fetch from MOI network failed at `init` |
 | `UploaderRequiredError` | `createAgent` called without `uploader` in config |
 | `UploaderError` | `uploader` threw or rejected |
-| `TransactionError` | On-chain transaction failed or returned no result |
+| `TransactionError` | On-chain transaction failed, or succeeded with an unusable result |
 | `QueryError` | A read call failed |
-| `AgentNotFoundError` | Agent ID does not exist |
+
+A missing agent isn't an error: `getAgentProfile` returns `{ found: false, profile: null }` instead
+of throwing.
 
 ---
 

@@ -1,24 +1,20 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.AgentNotFoundError = exports.QueryError = exports.TransactionError = exports.UploaderError = exports.UploaderRequiredError = exports.SignerRequiredError = exports.ContractLoadError = void 0;
+exports.QueryError = exports.TransactionError = exports.UploaderError = exports.UploaderRequiredError = exports.ContractLoadError = void 0;
+function formatCause(cause) {
+    return cause instanceof Error ? cause.message : String(cause);
+}
+/** Thrown by `AgentRegistry.init` when the contract manifest can't be fetched from the network. */
 class ContractLoadError extends Error {
     cause;
     constructor(cause) {
-        super(`Failed to load AgentRegistryLogic contract: ${cause instanceof Error ? cause.message : String(cause)}`);
+        super(`Failed to load AgentRegistryLogic contract: ${formatCause(cause)}`);
         this.cause = cause;
         this.name = 'ContractLoadError';
     }
 }
 exports.ContractLoadError = ContractLoadError;
-class SignerRequiredError extends Error {
-    operation;
-    constructor(operation) {
-        super(`A private key is required to call ${operation}. Pass privateKey in SDKConfig.`);
-        this.operation = operation;
-        this.name = 'SignerRequiredError';
-    }
-}
-exports.SignerRequiredError = SignerRequiredError;
+/** Thrown by `createAgent` when `SDKConfig` was built without an `uploader`. */
 class UploaderRequiredError extends Error {
     constructor() {
         super('An uploader function is required to call createAgent. Pass uploader in SDKConfig.');
@@ -26,15 +22,17 @@ class UploaderRequiredError extends Error {
     }
 }
 exports.UploaderRequiredError = UploaderRequiredError;
+/** Thrown by `createAgent` when the configured `uploader` throws or rejects. */
 class UploaderError extends Error {
     cause;
     constructor(cause) {
-        super(`Card upload failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+        super(`Card upload failed: ${formatCause(cause)}`);
         this.cause = cause;
         this.name = 'UploaderError';
     }
 }
 exports.UploaderError = UploaderError;
+/** Thrown by any write method when the on-chain interaction fails, or succeeds with an unusable result. */
 class TransactionError extends Error {
     transactionHash;
     cause;
@@ -46,6 +44,7 @@ class TransactionError extends Error {
     }
 }
 exports.TransactionError = TransactionError;
+/** Thrown by any read method when the underlying call fails. */
 class QueryError extends Error {
     cause;
     constructor(message, cause) {
@@ -55,13 +54,4 @@ class QueryError extends Error {
     }
 }
 exports.QueryError = QueryError;
-class AgentNotFoundError extends Error {
-    agentId;
-    constructor(agentId) {
-        super(`Agent not found: ${agentId}`);
-        this.agentId = agentId;
-        this.name = 'AgentNotFoundError';
-    }
-}
-exports.AgentNotFoundError = AgentNotFoundError;
 //# sourceMappingURL=errors.js.map

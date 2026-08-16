@@ -38,4 +38,20 @@ export interface GetAgentProfileOutput {
     profile: AgentProfile | null;
     found: boolean;
 }
+export interface AgentIdsResult {
+    ids: string[];
+    total: bigint;
+}
+/**
+ * Fuel overrides for a write call. The registry's own storage cost is
+ * self-funded (payer Logic), but the sender still pays the interaction's
+ * fuel - and default fuel estimation can revert once the registry holds
+ * enough on-chain state for simulation to exceed the SDK's default ceiling,
+ * even though the same call succeeds fine with an explicit limit. Pass this
+ * through if a write call fails fuel estimation with no fuel_limit set.
+ */
+export interface SendOptions {
+    fuel_limit?: number;
+    fuel_price?: number;
+}
 //# sourceMappingURL=types.d.ts.map

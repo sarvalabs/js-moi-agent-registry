@@ -17,6 +17,8 @@ export type {
   RegisterAgentInput,
   UpdateCardInput,
   GetAgentProfileOutput,
+  AgentIdsResult,
+  SendOptions,
 } from './types.js';
 
 export { AgentStatus } from './types.js';
@@ -27,5 +29,4 @@ export {
   UploaderError,
   TransactionError,
   QueryError,
-  AgentNotFoundError,
 } from './errors.js';
