@@ -2,7 +2,7 @@ import { getLogicDriver, LogicDriver } from 'js-moi-sdk';
 import type { Signer } from 'js-moi-sdk';
 
 export const LOGIC_ID = process.env.MOI_AGENT_REGISTRY_LOGIC_ID
-  ?? '0x20000000c684f926ed158d0cbfe66af0e482a389393e7899a5a73fcb00000000';
+  ?? '0x2000000097efdc0a58e8a28f2968ea414d6b26efdbf7baee96c7ff8600000000';
 
 /**
  * Routine signatures for AgentRegistryLogic, matching AgentRegistryLogic.coco.

@@ -1,6 +1,6 @@
 {
   "name": "js-moi-agent-registry",
-  "version": "0.3.0-rc1",
+  "version": "0.3.0-rc2",
   "description": "TypeScript SDK for the AgentRegistryLogic contract on MOI — protocol-agnostic on-chain agent registry",
   "main": "./lib.cjs/index.js",
   "module": "./lib.esm/index.js",
@@ -37,7 +37,7 @@
     "url": "https://github.com/sarvalabs/js-moi-agent-registry"
   },
   "peerDependencies": {
-    "js-moi-sdk": "0.8.0"
+    "js-moi-sdk": "^0.9.0-rc3"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
